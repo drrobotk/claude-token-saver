@@ -1,0 +1,3 @@
+# sourced paths are computed at runtime (lib/tools/<name>.sh), so shellcheck
+# cannot follow them; colour vars are consumed by callers, not this file.
+disable=SC1090,SC1091,SC2034

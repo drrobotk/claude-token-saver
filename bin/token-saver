@@ -1,0 +1,376 @@
+#!/usr/bin/env bash
+# token-saver — one conflict-aware toggle for a layered Claude Code
+# token-saving stack.  https://github.com/drrobotk/claude-token-saver
+#
+# Safe by design:
+#   * every config edit is backup -> validate -> replace
+#   * "off" parks config in ~/.claude/.token-saver-state and "on" restores it
+#     byte-for-byte, so nothing is ever regenerated from a guess
+#   * tools declare the resources they own; two owners of one resource is a
+#     refusal, not a warning
+set -uo pipefail
+
+TS_HOME="${TS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+. "$TS_HOME/lib/common.sh"
+
+VERSION="1.0.0"
+FORCE=false
+QUIET=false
+
+# ── status ────────────────────────────────────────────────────────────────────
+state_colour() {
+    case "$1" in
+        on)     printf '%s' "${GREEN}on${NC}" ;;
+        off)    printf '%s' "${YELLOW}off${NC}" ;;
+        absent) printf '%s' "${DIM}absent${NC}" ;;
+        *)      printf '%s' "$1" ;;
+    esac
+}
+
+cmd_status() {
+    load_all_modules
+    say "${BOLD}token-saver${NC} ${DIM}v$VERSION  (cwd: $PWD)${NC}"
+    printf '%s\n' "${DIM}TOOL                 STATE    BEST  NOTE${NC}"
+    printf '%s\n' "${DIM}-----------------------------------------------------------------------${NC}"
+    local t state best note pad conflict fn
+    for t in $(tool_names); do
+        state="$(tool_state "$t")"; [ -n "$state" ] || state=absent
+        best=""; [ "$(reg_best "$t")" = 1 ] && best="${BLUE}*${NC}"
+        fn="$(fn_name "$t")"
+        note=""
+        declare -f "note_$fn" >/dev/null 2>&1 && note="$("note_$fn" 2>/dev/null)"
+        [ -n "$note" ] || note="$(reg_desc "$t")"
+        if [ "$state" = on ]; then
+            conflict="$(conflicts_of "$t" | awk '{printf "%s:%s ", $1, $2}')"
+            [ -n "$conflict" ] && note="${YELLOW}${conflict}${NC}${DIM}| ${NC}$note"
+        fi
+        pad="$(printf '%*s' $((8 - ${#state})) '')"
+        printf ' %-19s %s%s %-5s %s\n' "$t" "$(state_colour "$state")" "$pad" "$best" "$note"
+    done
+    say ""
+    local model effort
+    model="$(py "print(load(SETTINGS).get('model', '-'))" 2>/dev/null)"
+    effort="$(py "print(load(SETTINGS).get('effortLevel', '-'))" 2>/dev/null)"
+    say "${DIM}model:${NC} $model   ${DIM}effort:${NC} $effort   ${DIM}backups:${NC} $STATE_DIR"
+    say "${DIM}* = curated stack (token-saver best). Run 'token-saver doctor' to check for interference.${NC}"
+}
+
+# ── conflict matrix ───────────────────────────────────────────────────────────
+cmd_conflicts() {
+    load_all_modules
+    say "${BOLD}Declared resource claims${NC} ${DIM}(x = exclusive, o = overlapping role)${NC}"
+    local t c
+    for t in $(tool_names); do
+        c="$(claims_of "$t" | tr '\n' ' ')"
+        [ -n "$c" ] && printf ' %-19s %s\n' "$t" "$c"
+    done
+    say ""
+    say "${BOLD}Pairs that interfere${NC}"
+    local kind a b res
+    all_claim_pairs | while read -r kind a b res; do
+        if [ "$kind" = x ]; then
+            printf ' %sHARD%s  %-18s %-18s %s\n' "$RED" "$NC" "$a" "$b" "$res"
+        else
+            printf ' %sSOFT%s  %-18s %-18s %s\n' "$YELLOW" "$NC" "$a" "$b" "$res"
+        fi
+    done
+    say ""
+    say "${DIM}HARD pairs can never both be on: token-saver refuses the second.${NC}"
+    say "${DIM}SOFT pairs both work but duplicate a benefit you are already paying for.${NC}"
+}
+
+# ── enable / disable, conflict aware ──────────────────────────────────────────
+cmd_on() {
+    local t; t="$(resolve "$1")"
+    tool_exists "$t" || { err "unknown tool: $t"; return 1; }
+    load_all_modules
+    local state; state="$(tool_state "$t")"
+    case "$state" in
+        on)     warn "$t already on"; return 0 ;;
+        absent) err "$t is not installed. Run: token-saver install $t"; return 1 ;;
+    esac
+
+    local conflicts; conflicts="$(conflicts_of "$t")"
+    if [ -n "$conflicts" ]; then
+        say "${YELLOW}$t shares resources with tools that are on:${NC}"
+        printf '%s\n' "$conflicts" | while read -r sev other res; do
+            printf '    %-5s %-18s %s\n' "$sev" "$other" "$res"
+        done
+        local losers; losers="$(hard_conflicts_of "$t")"
+        if [ -n "$losers" ]; then
+            say ""
+            say "${RED}Exclusive resource.${NC} Running both corrupts the config they share."
+            if confirm "Disable $(printf '%s' "$losers" | tr '\n' ' ')and enable $t?"; then
+                local l
+                for l in $losers; do tool_disable "$l"; done
+            else
+                err "aborted — $t not enabled"
+                return 1
+            fi
+        fi
+    fi
+    tool_enable "$t"
+}
+
+cmd_off() {
+    local t; t="$(resolve "$1")"
+    tool_exists "$t" || { err "unknown tool: $t"; return 1; }
+    load_all_modules
+    tool_disable "$t"
+}
+
+cmd_install() {
+    local t; t="$(resolve "$1")"
+    if [ "$t" = best ]; then cmd_best install; return; fi
+    tool_exists "$t" || { err "unknown tool: $t"; return 1; }
+    load_all_modules
+    local losers; losers="$(hard_conflicts_of "$t")"
+    if [ -n "$losers" ]; then
+        err "$t cannot coexist with: $(printf '%s' "$losers" | tr '\n' ' ')"
+        err "Turn that off first: token-saver off $(printf '%s' "$losers" | head -1)"
+        return 1
+    fi
+    tool_install "$t"
+}
+
+# ── the curated stack ─────────────────────────────────────────────────────────
+best_tools() { awk -F'|' '!/^#/ && NF>1 && $4==1 {print $1}' "$REGISTRY_FILE"; }
+
+cmd_best() {
+    local mode="${1:-on}"
+    load_all_modules
+    say "${BOLD}token-saver best${NC} — curated stack, verified to share no resource:"
+    local t state
+    for t in $(best_tools); do
+        state="$(tool_state "$t")"
+        case "$state" in
+            on)     info "  $t already on" ;;
+            off)    cmd_on "$t" ;;
+            absent) if [ "$mode" = install ]; then say "  installing $t..."; tool_install "$t" || warn "  $t install failed — skipping"
+                    else warn "  $t not installed — token-saver install $t"; fi ;;
+        esac
+    done
+    say ""
+    say "${BOLD}Restart Claude Code${NC} so model, MCP and plugin changes load."
+    cmd_doctor
+}
+
+cmd_all_off() {
+    load_all_modules
+    confirm "Disable every token-saving tool (kill switch)?" || return 1
+    local t
+    for t in $(tool_names); do
+        [ "$(tool_state "$t")" = on ] && tool_disable "$t"
+    done
+    ok "kill switch done — all tools off, config parked in $STATE_DIR"
+}
+
+# ── doctor: live interference check ───────────────────────────────────────────
+# The claim matrix says what *could* interfere. doctor looks at what actually
+# did, including damage done by tools installing themselves outside token-saver.
+cmd_doctor() {
+    load_all_modules
+    local problems=0
+    say ""
+    say "${BOLD}token-saver doctor${NC}"
+
+    # 1. Two owners of one exclusive resource.
+    local claim owners n t
+    for claim in $(for t in $(tool_names); do claims_of "$t"; done | sort -u | grep '^x:'); do
+        owners=""
+        for t in $(owners_of "$claim"); do
+            [ "$(tool_state "$t")" = on ] && owners="$owners $t"
+        done
+        n="$(printf '%s' "$owners" | wc -w | tr -d ' ')"
+        if [ "$n" -gt 1 ]; then
+            err "two owners of ${claim#x:}:$owners"
+            err "  fix: token-saver off $(printf '%s' "$owners" | awk '{print $2}')"
+            problems=$((problems + 1))
+        fi
+    done
+
+    # 2. ANTHROPIC_BASE_URL pointing at a port nothing answers on. This is the
+    #    failure that takes Claude Code down entirely, so it is checked live.
+    local url
+    url="$(py "print(load(SETTINGS).get('env', {}).get('ANTHROPIC_BASE_URL', ''))" 2>/dev/null)"
+    if [ -n "$url" ]; then
+        if curl -fsS -m2 "$url/health" >/dev/null 2>&1 || curl -fsS -m2 "$url" >/dev/null 2>&1; then
+            ok "  proxy at $url is answering"
+        else
+            err "ANTHROPIC_BASE_URL=$url but nothing is listening there."
+            err "  Claude Code cannot reach the API until this is fixed."
+            err "  fix: token-saver off headroom   (or: token-saver off claudeslim)"
+            problems=$((problems + 1))
+        fi
+    fi
+
+    # 3. More than one thing rewriting Bash commands, however it got there.
+    local rewriters
+    rewriters="$(py "
+import re
+s = load(SETTINGS)
+seen = set()
+for entries in s.get('hooks', {}).get('PreToolUse', []) or []:
+    for h in entries.get('hooks', []):
+        cmd = h.get('command', '')
+        for name in ('rtk', 'token-compression', 'lean-ctx', 'claudeslim'):
+            if name in cmd: seen.add(name)
+print(' '.join(sorted(seen)))
+" 2>/dev/null)"
+    if [ "$(printf '%s' "$rewriters" | wc -w | tr -d ' ')" -gt 1 ]; then
+        err "several PreToolUse hooks rewrite Bash: $rewriters"
+        err "  the second rewrites the first one's output; keep exactly one"
+        problems=$((problems + 1))
+    fi
+
+    # 4. Tools reporting on while their config sits parked in the state dir.
+    local parked base
+    for parked in "$STATE_DIR"/mcp-*.json "$STATE_DIR"/hooks-*.json; do
+        [ -f "$parked" ] || continue
+        base="$(basename "$parked")"; base="${base#mcp-}"; base="${base#hooks-}"; base="${base%.json}"
+        tool_exists "$base" || continue
+        if [ "$(tool_state "$base")" = on ]; then
+            warn "$base is on but a parked copy remains at $parked"
+            warn "  harmless, but it will be re-applied on the next enable — delete it if unexpected"
+        fi
+    done
+
+    # 5. Config files that no longer parse. Everything here edits them, so a
+    #    broken file means the next tool to write silently starts from {}.
+    local f
+    for f in "$SETTINGS" "$CLAUDE_JSON" "$MCP_JSON"; do
+        [ -f "$f" ] || continue
+        if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1]))" "$f" >/dev/null 2>&1; then
+            err "$f is not valid JSON — restore from $STATE_DIR before changing anything"
+            problems=$((problems + 1))
+        fi
+    done
+
+    # 6. MCP server count: each one costs schema tokens every session.
+    local servers
+    servers="$(py "
+c = load(CLAUDE_JSON)
+names = set(c.get('mcpServers', {}))
+for d in c.get('projects', {}).values(): names |= set(d.get('mcpServers', {}))
+print(len(names))
+" 2>/dev/null)"
+    if [ -n "$servers" ] && [ "$servers" -gt 5 ] && [ "$(tool_state tool-search)" != on ]; then
+        warn "$servers MCP servers configured with tool-search off"
+        warn "  each one's schemas load every session — fix: token-saver on tool-search"
+    fi
+
+    if [ "$problems" -eq 0 ]; then
+        ok "  no interference detected"
+    else
+        err "$problems problem(s) found"
+        return 1
+    fi
+}
+
+# ── selftest: the registry itself must be coherent ────────────────────────────
+cmd_selftest() {
+    load_all_modules
+    local fails=0 t kind
+
+    # The curated stack must be internally conflict-free, hard AND soft. This is
+    # the guarantee `best` makes, so it is checked rather than asserted.
+    local a b res kind_
+    while read -r kind_ a b res; do
+        [ -z "$kind_" ] && continue
+        if best_tools | grep -qx "$a" && best_tools | grep -qx "$b"; then
+            err "best stack is not clean: $a and $b both claim $res"
+            fails=$((fails + 1))
+        fi
+    done < <(all_claim_pairs)
+
+    # Every tool must be dispatchable: a custom tool needs a module, an mcp tool
+    # needs a spec, a plugin needs a marketplace or an install_ override.
+    for t in $(tool_names); do
+        kind="$(reg_kind "$t")"
+        case "$kind" in
+            custom)
+                [ -f "$TOOLS_DIR/$t.sh" ] || { err "$t is custom but lib/tools/$t.sh is missing"; fails=$((fails + 1)); }
+                declare -f "state_$(fn_name "$t")" >/dev/null 2>&1 || { err "$t has no state_ function"; fails=$((fails + 1)); }
+                ;;
+            mcp)
+                [ -f "$SPEC_DIR/$(reg_ref "$t").json" ] || [ -f "$TOOLS_DIR/$t.sh" ] \
+                    || { err "$t is mcp but lib/specs/$(reg_ref "$t").json is missing"; fails=$((fails + 1)); }
+                ;;
+            plugin)
+                case "$(reg_ref "$t")" in *@*) ;; *) err "$t plugin ref must be <plugin>@<marketplace>"; fails=$((fails + 1)) ;; esac
+                ;;
+            env)
+                case "$(reg_ref "$t")" in *=*) ;; *) err "$t env ref must be VAR=value"; fails=$((fails + 1)) ;; esac
+                ;;
+            *) err "$t has unknown kind: $kind"; fails=$((fails + 1)) ;;
+        esac
+        # Every tool must answer with one of the three states.
+        case "$(tool_state "$t")" in
+            on|off|absent) ;;
+            *) err "$t returned a state that is neither on, off nor absent"; fails=$((fails + 1)) ;;
+        esac
+    done
+
+    if [ "$fails" -eq 0 ]; then ok "selftest passed — registry coherent, curated stack conflict-free"; return 0; fi
+    err "selftest: $fails failure(s)"
+    return 1
+}
+
+# ── usage report ──────────────────────────────────────────────────────────────
+cmd_usage_report() {
+    if command -v bunx >/dev/null 2>&1; then bunx ccusage@latest "$@"
+    elif command -v npx >/dev/null 2>&1; then npx -y ccusage@latest "$@"
+    else err "needs bun or npm to run ccusage"; return 1; fi
+}
+
+usage() {
+    cat <<EOF
+${BOLD}token-saver${NC} v$VERSION — one toggle for the Claude Code token-saving stack
+
+  token-saver                       status of every tool, with live conflicts
+  token-saver best                  enable the curated, conflict-free stack
+  token-saver install best          install then enable the whole stack
+  token-saver install <tool>        install one tool and its prerequisites
+  token-saver on <tool>             enable one (refuses to break another)
+  token-saver off <tool>            disable one, parking its config
+  token-saver off                   kill switch — disable everything
+  token-saver doctor                check for live interference and breakage
+  token-saver conflicts             the full claim matrix, before you install
+  token-saver selftest              verify the registry and the curated stack
+  token-saver report [args]         token spend via ccusage
+
+Flags:  --force   skip confirmation prompts (required when piped)
+        --quiet   suppress notes
+
+Tools:  $(tool_names | tr '\n' ' ')
+Alias:  mem ctx tok thv crg graph cave pony lean plex hr tc ts tr slim md
+EOF
+}
+
+# ── arg parse ─────────────────────────────────────────────────────────────────
+ARGS=()
+for a in "$@"; do
+    case "$a" in
+        --force) FORCE=true ;;
+        --quiet) QUIET=true ;;
+        *) ARGS+=("$a") ;;
+    esac
+done
+set -- ${ARGS+"${ARGS[@]}"}
+
+cmd="${1:-status}"
+case "$cmd" in
+    status|"")  cmd_status ;;
+    best)       acquire_lock && cmd_best "${2:-on}" ;;
+    install)    [ -n "${2:-}" ] || { err "which tool? try: token-saver install best"; exit 1; }
+                acquire_lock && cmd_install "$2" ;;
+    on)         if [ -n "${2:-}" ]; then acquire_lock && cmd_on "$2"; else acquire_lock && cmd_best on; fi ;;
+    off)        if [ -n "${2:-}" ]; then acquire_lock && cmd_off "$2"; else acquire_lock && cmd_all_off; fi ;;
+    doctor)     cmd_doctor ;;
+    conflicts)  cmd_conflicts ;;
+    selftest)   cmd_selftest ;;
+    report)     shift; cmd_usage_report "$@" ;;
+    version|-v|--version) say "token-saver $VERSION" ;;
+    help|-h|--help) usage ;;
+    *)          err "unknown command: $cmd"; usage; exit 1 ;;
+esac

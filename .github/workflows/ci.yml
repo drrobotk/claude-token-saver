@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Advisory: style findings should not fail a PR that passes the suite.
+      - name: shellcheck
+        if: matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -S warning -x bin/token-saver lib/common.sh lib/tools/*.sh install.sh tests/run.sh
+
+      - name: syntax
+        run: |
+          bash -n bin/token-saver
+          bash -n lib/common.sh
+          for f in lib/tools/*.sh; do bash -n "$f"; done
+
+      - name: specs are valid json
+        run: for f in lib/specs/*.json; do python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$f"; done
+
+      - name: registry and conflict model
+        run: TS_HOME="$PWD" bash tests/run.sh

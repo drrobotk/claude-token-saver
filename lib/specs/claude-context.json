@@ -1,0 +1,1 @@
+{"command":"npx","args":["-y","@zilliz/claude-context-mcp@latest"],"env":{"OPENAI_API_KEY":"${OPENAI_API_KEY}","MILVUS_ADDRESS":"${MILVUS_ADDRESS}","MILVUS_TOKEN":"${MILVUS_TOKEN}"}}

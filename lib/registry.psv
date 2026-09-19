@@ -1,0 +1,47 @@
+# token-saver tool registry
+# name|kind|ref|best|claims|description
+#
+#   kind      mcp     ref = MCP server key; spec in lib/specs/<name>.json
+#             plugin  ref = <plugin>@<marketplace>; repo in lib/specs/<name>.market
+#             env     ref = VAR=value in ~/.claude/settings.json
+#             hook    ref = regex matching the hook command in settings.json
+#             custom  everything lives in lib/tools/<name>.sh
+#
+#   best      1 = member of the curated stack. The stack is verified to share no
+#             claim at all (`token-saver selftest` fails the build otherwise).
+#
+#   claims    what the tool takes ownership of, comma separated.
+#               x:<resource>  exclusive — two live owners break each other.
+#                             token-saver refuses to enable the second.
+#               o:<role>      overlapping — both work, but you pay twice for
+#                             one benefit. token-saver warns.
+#             Conflicts are DERIVED from these. Never hand-list a pair.
+#
+# Resource names in use:
+#   x:env.ANTHROPIC_BASE_URL  routes the API through a local proxy
+#   x:hook.PreToolUse.Bash    rewrites Bash commands before they run
+#   x:mcp.gateway             replaces the whole mcpServers block
+#   x:settings.hooks          bulk-edits other tools' hook entries
+#   x:port.NNNN               binds a localhost port
+#   o:cli-output o:ctx-compress o:code-retrieval o:terse-style o:memory
+
+tool-search|env|ENABLE_TOOL_SEARCH=1|1||Defer MCP tool schemas until called (biggest free win)
+lean-settings|custom||0|x:settings.hooks|Park per-call hooks that cost time and context
+rtk|custom||1|x:hook.PreToolUse.Bash,o:cli-output|Rust CLI output compression via PreToolUse hook
+token-compression|plugin|token-compression@quantexa-central-plugins|0|x:hook.PreToolUse.Bash,o:cli-output|MCP payload compression, RTK-backed (org marketplace)
+caveman|plugin|caveman@caveman|1|o:terse-style|Terse assistant output style
+ponytail|plugin|ponytail@ponytail|0|o:terse-style|YAGNI / minimal-code ruleset each turn
+context-mode|mcp|context-mode|1|o:ctx-compress|Sandboxes verbose tool output outside context
+token-optimizer|mcp|token-optimizer|0|o:ctx-compress|Caches and compresses repeated payloads
+lean-ctx|plugin|lean-ctx@yvgude-lean-ctx|0|o:ctx-compress|Compresses file reads before they land
+code-review-graph|custom||1|o:code-retrieval|Tree-sitter knowledge graph of the repo
+serena|custom||0|o:code-retrieval|LSP symbol-level code retrieval and editing
+token-reducer|plugin|token-reducer@Madhan230205-token-reducer|0|o:code-retrieval|Local BM25+vector context compression
+claude-context|mcp|claude-context|0|o:code-retrieval|Semantic code search MCP (needs OpenAI + Milvus keys)
+graphify|custom||1||Any input to a clustered knowledge graph (skill)
+claude-mem|custom||1|o:memory|Cross-session memory so you re-explain less
+markitdown|mcp|markitdown|1||Convert PDF/DOCX/XLSX to lean Markdown
+toolhive|custom||0|x:mcp.gateway|Containerised MCP servers behind one client entry
+mcplex|custom||0|x:mcp.gateway|Semantic MCP gateway — one entry for many servers
+headroom|custom||0|x:env.ANTHROPIC_BASE_URL,x:port.8080,o:memory|Local compression proxy in front of the API
+claudeslim|custom||0|x:env.ANTHROPIC_BASE_URL,x:port.8123|Local proxy that compresses API calls (60-85%)
