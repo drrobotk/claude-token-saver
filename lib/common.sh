@@ -210,7 +210,11 @@ print(name + ' disabled (parked)')
 }
 
 mcp_enable() {
-    local name="$1" parked="$STATE_DIR/mcp-$name.json"
+    # Two statements, not one: in a single `local`, later values are expanded
+    # against the caller's scope, so "$name" would be whatever the caller
+    # happened to have — empty, when called straight from a tool module.
+    local name="$1"
+    local parked="$STATE_DIR/mcp-$name.json"
     if [ ! -f "$parked" ]; then
         mcp_install_from_spec "$name"
         return
@@ -233,7 +237,8 @@ print(name + ' enabled')
 
 # Write a server straight from lib/specs/<name>.json (used on first install).
 mcp_install_from_spec() {
-    local name="$1" spec="$SPEC_DIR/$name.json"
+    local name="$1"
+    local spec="$SPEC_DIR/$name.json"
     [ -f "$spec" ] || { err "no MCP spec for $name"; return 1; }
     backup "$CLAUDE_JSON"
     py "

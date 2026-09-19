@@ -147,5 +147,17 @@ held="$(jqpy "$TS_CLAUDE_JSON" "'context-mode' in d['mcpServers']")"
 check "a live lock blocks a second run" "$held" "True"
 rm -rf "$TS_STATE_DIR/.lock"
 
+# ── 10. helpers work when called from a module, not just from the dispatcher ─
+#       (a single `local a=$1 b=...$a...` expands b against the *caller's*
+#       scope, so these paths only appeared to work from one call path)
+seed
+printf '%s\n' '{"mcpServers":{}}' > "$TS_CLAUDE_JSON"
+( TS_HOME="$TS_HOME"; . "$TS_HOME/lib/common.sh"; mcp_install_from_spec markitdown >/dev/null 2>&1 )
+wrote="$(jqpy "$TS_CLAUDE_JSON" "d['mcpServers']['markitdown']['command']")"
+check "mcp_install_from_spec works from a bare scope" "$wrote" "uvx"
+( TS_HOME="$TS_HOME"; . "$TS_HOME/lib/common.sh"; mcp_disable markitdown >/dev/null 2>&1; mcp_enable markitdown >/dev/null 2>&1 )
+back="$(jqpy "$TS_CLAUDE_JSON" "'markitdown' in d['mcpServers']")"
+check "mcp_enable works from a bare scope" "$back" "True"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
