@@ -59,7 +59,7 @@ If you already have Claude Code, paste this and let it do the work:
 | `hook.PreToolUse.Bash` | Two command rewriters means the second rewrites the first one's output, or drops its filtering. |
 | `mcp.gateway` | A gateway rewrites the whole `mcpServers` block. Two of them and the loser's servers vanish on the next write. |
 | `settings.hooks` | Bulk hook editing. `lean-settings` must never park a hook belonging to a tool that is currently on. |
-| `port.NNNN` | Self-explanatory, and a dead port in `ANTHROPIC_BASE_URL` takes Claude Code down entirely. |
+Ports are deliberately *not* declared: they are per-profile and configurable, so a number in the registry would go stale. `doctor` checks the live one instead — a dead port in `ANTHROPIC_BASE_URL` takes Claude Code down entirely.
 
 Conflicts are *derived* from those claims, never hand-listed pair by pair. Add a tool to `lib/registry.psv` and it is checked against every existing tool automatically. `token-saver selftest` fails if the curated stack ever stops being conflict-free.
 

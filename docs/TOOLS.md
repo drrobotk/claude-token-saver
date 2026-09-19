@@ -241,10 +241,16 @@ Ships as a release binary: download to `~/bin/mcplex`, `chmod +x`, then
 
 ## headroom
 
+Also: enabling it moves the proxy route out of `settings.json` and into your
+shell profile, so `env -u ANTHROPIC_BASE_URL claude --remote-control` still
+works — `token-saver rc` does exactly that, and `token-saver rc install` adds a
+`claude-rc()` function. A route in `settings.json` cannot be dropped per
+session, because that file's `env` block overrides the process environment.
+
 [chopratejas/headroom](https://github.com/chopratejas/headroom). A compression
 proxy between Claude Code and the API.
 
-Claims: `x:env.ANTHROPIC_BASE_URL`, `x:port.8080`, `o:memory`.
+Claims: `x:env.ANTHROPIC_BASE_URL`, `o:memory`.
 
 The hazards, all handled:
 
@@ -274,8 +280,7 @@ installing.
 [ClaudeSlim](https://github.com/buzzlair/ClaudeSlim). Local proxy that
 intercepts and compresses API calls, reported at 60–85%.
 
-Claims: `x:env.ANTHROPIC_BASE_URL`, `x:port.8123` — mutually exclusive with
-headroom.
+Claims: `x:env.ANTHROPIC_BASE_URL` — mutually exclusive with headroom.
 
 Reported to be incompatible with OAuth (subscription) authentication; works best
 with API-key auth. token-saver clears the base URL *before* killing the process
@@ -315,7 +320,6 @@ Resource names currently in use:
 | `x:hook.PreToolUse.Bash` | rtk, token-compression |
 | `x:mcp.gateway` | toolhive, mcplex |
 | `x:settings.hooks` | lean-settings |
-| `x:port.8080` / `x:port.8123` | headroom / claudeslim |
 | `o:cli-output` | rtk, token-compression |
 | `o:ctx-compress` | context-mode, token-optimizer, lean-ctx |
 | `o:code-retrieval` | code-review-graph, serena, token-reducer, claude-context |
