@@ -214,6 +214,18 @@ cmd_doctor() {
         fi
     fi
 
+    # 2b. A proxy route in settings.json disables Remote Control with no way
+    #     out: that env block overrides the process environment, so the usual
+    #     `env -u ANTHROPIC_BASE_URL claude --remote-control` escape hatch has
+    #     nothing to remove. Same proxy, same saving, from the shell instead.
+    local in_settings
+    in_settings="$(py "print(load(SETTINGS).get('env', {}).get('ANTHROPIC_BASE_URL', ''))" 2>/dev/null)"
+    if [ -n "$in_settings" ]; then
+        warn "ANTHROPIC_BASE_URL is set in settings.json, which disables Remote Control"
+        warn "  settings.json env overrides the process env, so 'env -u' cannot undo it"
+        warn "  fix: token-saver on headroom   (moves the route to your shell profile)"
+    fi
+
     # 3. More than one thing rewriting Bash commands, however it got there.
     local rewriters
     rewriters="$(py "
@@ -326,6 +338,58 @@ cmd_selftest() {
     return 1
 }
 
+# ── rc: one Claude Code session with Remote Control, proxy dropped ────────────
+# Remote Control needs a direct connection to the API, so any proxy in
+# ANTHROPIC_BASE_URL disables it. This drops the variable for one session and
+# leaves every other session routed through the proxy as normal.
+cmd_rc() {
+    load_all_modules
+    if [ "${1:-}" = install ]; then rc_install_shell_fn; return; fi
+
+    local in_settings
+    in_settings="$(py "print(load(SETTINGS).get('env', {}).get('ANTHROPIC_BASE_URL', ''))" 2>/dev/null)"
+    if [ -n "$in_settings" ]; then
+        err "ANTHROPIC_BASE_URL lives in settings.json, whose env block overrides the"
+        err "process environment — dropping it here would have no effect."
+        if confirm "Move the route to your shell profile so Remote Control works?"; then
+            acquire_lock || return 1
+            _headroom_route_via_shell
+        else
+            return 1
+        fi
+    fi
+
+    local bin; bin="$(command -v claude || echo "$HOME/.local/bin/claude")"
+    [ -x "$bin" ] || { err "claude CLI not found"; return 1; }
+    info "starting Claude Code with Remote Control, without the proxy..."
+    exec env -u ANTHROPIC_BASE_URL "$bin" --remote-control "$@"
+}
+
+rc_install_shell_fn() {
+    local rc="${TS_SHELL_RC:-$HOME/.zshrc}"
+    if grep -q 'claude-rc()' "$rc" 2>/dev/null; then
+        info "claude-rc() already defined in $(basename "$rc")"
+        return 0
+    fi
+    backup "$rc"
+    cat >> "$rc" <<'SHELL'
+
+# >>> token-saver: claude remote control >>>
+# Remote Control needs a direct connection to the API, which a compression
+# proxy in ANTHROPIC_BASE_URL prevents. This runs one session without the
+# proxy; every other session stays routed through it as normal.
+claude-rc() {
+  env -u ANTHROPIC_BASE_URL claude --remote-control "$@"
+}
+# <<< token-saver: claude remote control <<<
+SHELL
+    ok "claude-rc() added to $(basename "$rc") — open a new shell, then run: claude-rc"
+    local in_settings
+    in_settings="$(py "print(load(SETTINGS).get('env', {}).get('ANTHROPIC_BASE_URL', ''))" 2>/dev/null)"
+    [ -n "$in_settings" ] && warn "the route is still in settings.json, which defeats it — run: token-saver rc"
+    return 0
+}
+
 # ── usage report ──────────────────────────────────────────────────────────────
 cmd_usage_report() {
     if command -v bunx >/dev/null 2>&1; then bunx ccusage@latest "$@"
@@ -347,6 +411,8 @@ ${BOLD}token-saver${NC} v$VERSION — one toggle for the Claude Code token-savin
   token-saver doctor                check for live interference and breakage
   token-saver conflicts             the full claim matrix, before you install
   token-saver selftest              verify the registry and the curated stack
+  token-saver rc [claude args]      one session with Remote Control, no proxy
+  token-saver rc install            add a claude-rc() function to your shell
   token-saver report [args]         token spend via ccusage
 
 Flags:  --force   skip confirmation prompts (required when piped)
@@ -379,6 +445,7 @@ case "$cmd" in
     doctor)     cmd_doctor ;;
     conflicts)  cmd_conflicts ;;
     selftest)   cmd_selftest ;;
+    rc)         shift; cmd_rc "$@" ;;
     report)     shift; cmd_usage_report "$@" ;;
     version|-v|--version) say "token-saver $VERSION" ;;
     help|-h|--help) usage ;;

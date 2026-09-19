@@ -173,5 +173,43 @@ PY
 n="$(jqpy "$TS_SETTINGS" "sum('rtk' in h['command'] for e in d['hooks']['PreToolUse'] for h in e['hooks'])")"
 check "a re-registered hook is not restored twice" "$n" "1"
 
+# ── 12. the proxy route moves to the shell, and comes back out ─────────────
+#       A route in settings.json cannot be dropped per session, so Remote
+#       Control stays off; a route left in the shell after "off" points every
+#       new shell at a dead proxy. Both directions matter.
+seed
+RC="$SANDBOX/rc"; : > "$RC"
+python3 - <<'PY'
+import json, os
+p = os.environ['TS_SETTINGS']; s = json.load(open(p))
+s['env'] = {'ANTHROPIC_BASE_URL': 'http://127.0.0.1:8787'}
+json.dump(s, open(p, 'w'), indent=2)
+PY
+( TS_HOME="$TS_HOME"; TS_SHELL_RC="$RC"; . "$TS_HOME/lib/common.sh"; . "$TS_HOME/lib/tools/headroom.sh"
+  _headroom_route_via_shell >/dev/null 2>&1 )
+left="$(jqpy "$TS_SETTINGS" "d.get('env',{}).get('ANTHROPIC_BASE_URL','')")"
+check "the route leaves settings.json" "$left" ""
+grep -q 'export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"' "$RC" \
+    && ok "the route lands in the shell profile" \
+    || nope "the route lands in the shell profile" "$(cat "$RC")"
+
+( TS_HOME="$TS_HOME"; TS_SHELL_RC="$RC"; . "$TS_HOME/lib/common.sh"; . "$TS_HOME/lib/tools/headroom.sh"
+  _headroom_unroute_shell >/dev/null 2>&1 )
+grep -q 'ANTHROPIC_BASE_URL' "$RC" \
+    && nope "off removes the shell export" "$(cat "$RC")" \
+    || ok "off removes the shell export"
+
+doctor_out="$(TS_SHELL_RC="$RC" "$TS" doctor 2>&1)"
+seed
+python3 - <<'PY'
+import json, os
+p = os.environ['TS_SETTINGS']; s = json.load(open(p))
+s['env'] = {'ANTHROPIC_BASE_URL': 'http://127.0.0.1:8787'}
+json.dump(s, open(p, 'w'), indent=2)
+PY
+out="$("$TS" doctor 2>&1)"
+case "$out" in *"disables Remote Control"*) ok "doctor flags a route in settings.json" ;;
+               *) nope "doctor flags a route in settings.json" "$out" ;; esac
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

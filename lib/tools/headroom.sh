@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # headroom — a compression proxy that sits between Claude Code and the API.
 #
-# Claims x:env.ANTHROPIC_BASE_URL and x:port.8080. Two proxies cannot both own
+# Claims x:env.ANTHROPIC_BASE_URL. Two proxies cannot both own
 # the base URL, and "off" must remove the routing AND stop the process: leaving
 # ANTHROPIC_BASE_URL pointed at a dead port breaks Claude Code completely. Its
 # durable hooks re-install the config on every session start, so they come out
@@ -14,10 +14,67 @@ SHELL_RC="${TS_SHELL_RC:-$HOME/.zshrc}"
 
 hookpat_headroom() { echo 'headroom'; }
 
+# Where the route lives matters more than that it exists — see _headroom_route.
+_headroom_url_settings() { py "print(load(SETTINGS).get('env', {}).get('ANTHROPIC_BASE_URL', ''))"; }
+_headroom_url_shell() {
+    [ -f "$SHELL_RC" ] || return 0
+    sed -n 's/^[[:space:]]*export ANTHROPIC_BASE_URL=["'"'"']\{0,1\}\([^"'"'"']*\).*/\1/p' "$SHELL_RC" | tail -1
+}
+_headroom_url() {
+    local u; u="$(_headroom_url_settings)"
+    [ -n "$u" ] && { printf '%s' "$u"; return; }
+    _headroom_url_shell
+}
+
 state_headroom() {
     [ -x "$HEADROOM_BIN" ] || { echo absent; return; }
-    local url; url="$(py "print(load(SETTINGS).get('env', {}).get('ANTHROPIC_BASE_URL', ''))")"
-    [ -n "$url" ] && echo on || echo off
+    [ -n "$(_headroom_url)" ] && echo on || echo off
+}
+
+# Claude Code's Remote Control needs a direct connection to the API, so it is
+# disabled whenever the base URL is redirected. Routing through the shell lets
+# you drop the proxy for a single session:
+#
+#     env -u ANTHROPIC_BASE_URL claude --remote-control
+#
+# Routing through settings.json does not: that env block overrides the process
+# environment, so `env -u` has nothing to remove and Remote Control stays off
+# with no way to opt out short of editing the file. Same proxy either way, so
+# token-saver moves the route to the shell. TS_HEADROOM_ROUTE=settings opts out.
+_headroom_route_via_shell() {
+    [ "${TS_HEADROOM_ROUTE:-shell}" = shell ] || return 0
+    local url; url="$(_headroom_url_settings)"
+    [ -n "$url" ] || return 0
+    env_unset ANTHROPIC_BASE_URL >/dev/null
+    if [ "$(_headroom_url_shell)" = "$url" ]; then
+        info "  route already exported from $(basename "$SHELL_RC"); removed the settings.json copy"
+    else
+        printf '\n# Added by token-saver: keep the proxy route in the shell, not in\n# settings.json, so `env -u ANTHROPIC_BASE_URL claude --remote-control` works.\nexport ANTHROPIC_BASE_URL="%s"\n' "$url" >> "$SHELL_RC"
+        info "  moved the route to $(basename "$SHELL_RC") — open a new shell for it to apply"
+    fi
+    ok "  Remote Control is reachable again: env -u ANTHROPIC_BASE_URL claude --remote-control"
+}
+
+# The mirror of the above. Moving the route to the shell means "off" has to take
+# it out of the shell too — a leftover export points every NEW shell at a proxy
+# that is no longer running, which is the one failure that breaks Claude Code
+# outright. Removed unconditionally, whichever way the route was written.
+_headroom_unroute_shell() {
+    [ -f "$SHELL_RC" ] || return 0
+    TS_SHELL_RC="$SHELL_RC" py "
+import re
+z = os.environ['TS_SHELL_RC']
+t = open(z).read()
+orig = t
+# the stanza token-saver appends, comments and all
+t = re.sub(r'\n*# Added by token-saver: keep the proxy route[^\n]*\n(?:#[^\n]*\n)*export ANTHROPIC_BASE_URL=[^\n]*\n', '\n', t)
+# and any bare export left by an earlier setup
+t = re.sub(r'\n?^[ \t]*export ANTHROPIC_BASE_URL=[^\n]*\n', '\n', t, flags=re.M)
+if t != orig:
+    open(os.path.join(STATE_DIR, 'headroom-route-shell.txt'), 'w').write(orig)
+    open(z, 'w').write(t)
+    print('  removed the proxy export from ' + os.path.basename(z) + ' (previous file saved in the state dir)')
+"
 }
 
 _headroom_profiles() {
@@ -86,6 +143,7 @@ if m:
     open(os.path.join(STATE_DIR, 'headroom-shellrc.txt'), 'w').write(m.group(0))
     open(z, 'w').write(t[:m.start()] + t[m.end():])
 "
+    _headroom_unroute_shell
     _headroom_stop
     backup "$SETTINGS"; backup "$CLAUDE_JSON"
     py "
@@ -134,6 +192,7 @@ enable_headroom() {
         _headroom_align_profiles
         repair_settings
         _headroom_start
+        _headroom_route_via_shell
         _headroom_verify
         return
     fi
@@ -168,6 +227,7 @@ if os.path.exists(bk):
     _headroom_align_profiles
     repair_settings
     _headroom_start
+    _headroom_route_via_shell
     _headroom_verify
 }
 
@@ -175,7 +235,7 @@ if os.path.exists(bk):
 # never leave `on` claiming success without a live answer on the other end.
 _headroom_verify() {
     local url waited=0
-    url="$(py "print(load(SETTINGS).get('env', {}).get('ANTHROPIC_BASE_URL', ''))")"
+    url="$(_headroom_url)"
     if [ -z "$url" ]; then err "headroom did not set ANTHROPIC_BASE_URL"; return 1; fi
     while [ "$waited" -lt 30 ]; do
         if curl -fsS -m2 "$url/health" >/dev/null 2>&1 || curl -fsS -m2 "$url" >/dev/null 2>&1; then

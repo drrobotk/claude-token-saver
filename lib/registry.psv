@@ -22,7 +22,8 @@
 #   x:hook.PreToolUse.Bash    rewrites Bash commands before they run
 #   x:mcp.gateway             replaces the whole mcpServers block
 #   x:settings.hooks          bulk-edits other tools' hook entries
-#   x:port.NNNN               binds a localhost port
+#   (ports are per-profile and configurable, so they are checked live by
+#    `doctor` rather than declared here)
 #   o:cli-output o:ctx-compress o:code-retrieval o:terse-style o:memory
 
 tool-search|env|ENABLE_TOOL_SEARCH=1|1||Defer MCP tool schemas until called (biggest free win)
@@ -43,5 +44,5 @@ claude-mem|custom||1|o:memory|Cross-session memory so you re-explain less
 markitdown|mcp|markitdown|1||Convert PDF/DOCX/XLSX to lean Markdown
 toolhive|custom||0|x:mcp.gateway|Containerised MCP servers behind one client entry
 mcplex|custom||0|x:mcp.gateway|Semantic MCP gateway — one entry for many servers
-headroom|custom||0|x:env.ANTHROPIC_BASE_URL,x:port.8080,o:memory|Local compression proxy in front of the API
-claudeslim|custom||0|x:env.ANTHROPIC_BASE_URL,x:port.8123|Local proxy that compresses API calls (60-85%)
+headroom|custom||0|x:env.ANTHROPIC_BASE_URL,o:memory|Local compression proxy in front of the API
+claudeslim|custom||0|x:env.ANTHROPIC_BASE_URL|Local proxy that compresses API calls (60-85%)
