@@ -10,7 +10,17 @@
 #     refusal, not a warning
 set -uo pipefail
 
-TS_HOME="${TS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# install.sh symlinks this into ~/.local/bin, so the script's own directory is
+# not the repo's. Walk the symlink chain to find where lib/ actually lives.
+_ts_src="${BASH_SOURCE[0]}"
+while [ -L "$_ts_src" ]; do
+    _ts_dir="$(cd -P "$(dirname "$_ts_src")" && pwd)"
+    _ts_src="$(readlink "$_ts_src")"
+    case "$_ts_src" in /*) ;; *) _ts_src="$_ts_dir/$_ts_src" ;; esac
+done
+TS_HOME="${TS_HOME:-$(cd -P "$(dirname "$_ts_src")/.." && pwd)}"
+unset _ts_src _ts_dir
+
 . "$TS_HOME/lib/common.sh"
 
 VERSION="1.0.0"
