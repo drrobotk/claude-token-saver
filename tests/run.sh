@@ -159,5 +159,19 @@ check "mcp_install_from_spec works from a bare scope" "$wrote" "uvx"
 back="$(jqpy "$TS_CLAUDE_JSON" "'markitdown' in d['mcpServers']")"
 check "mcp_enable works from a bare scope" "$back" "True"
 
+# ── 11. restoring a hook the tool already re-registered must not double it ──
+seed
+( TS_HOME="$TS_HOME"; . "$TS_HOME/lib/common.sh"; hook_park rtk 'rtk' >/dev/null 2>&1 )
+python3 - <<'PY'
+import json, os
+p = os.environ['TS_SETTINGS']; s = json.load(open(p))
+s.setdefault('hooks', {}).setdefault('PreToolUse', []).append(
+    {"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook"}]})
+json.dump(s, open(p, 'w'), indent=2)
+PY
+( TS_HOME="$TS_HOME"; . "$TS_HOME/lib/common.sh"; hook_restore rtk >/dev/null 2>&1 )
+n="$(jqpy "$TS_SETTINGS" "sum('rtk' in h['command'] for e in d['hooks']['PreToolUse'] for h in e['hooks'])")"
+check "a re-registered hook is not restored twice" "$n" "1"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

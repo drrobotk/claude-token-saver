@@ -406,11 +406,17 @@ name = sys.argv[1]
 path = os.path.join(STATE_DIR, 'hooks-' + name + '.json')
 parked = load(path)
 s = load(SETTINGS)
+dupes = 0
 for ev, entries in parked.items():
-    s.setdefault('hooks', {}).setdefault(ev, []).extend(entries)
+    existing = s.setdefault('hooks', {}).setdefault(ev, [])
+    for e in entries:
+        # The tool may have re-registered its own hook while parked (rtk does,
+        # via 'rtk init'). Restoring blindly would fire it twice per call.
+        if e in existing: dupes += 1
+        else: existing.append(e)
 save(SETTINGS, s)
 os.remove(path)
-print(name + ' enabled (hooks restored)')
+print(name + ' enabled (hooks restored%s)' % (', %d already present' % dupes if dupes else ''))
 " "$1"
 }
 
