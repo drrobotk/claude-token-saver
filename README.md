@@ -124,6 +124,60 @@ token-saver report             token spend via ccusage
 
 `--force` skips confirmation prompts and is required when running non-interactively.
 
+## Measure before you optimise
+
+Every tool in this repo reports how many **tokens** it removed. That is the
+wrong denominator, and following it leads you to optimise the cheapest thing on
+the bill.
+
+`token-saver cost` prices your actual usage from `~/.claude/projects/*.jsonl` —
+the numbers the API itself reported, not an estimate:
+
+```
+$ token-saver cost 7
+
+where the money goes
+  $  469.25   60.0%  #######################    cache read    re-reading the conversation every turn
+  $  212.92   27.2%  ##########                 cache write   rebuilding a prefix that changed
+  $   98.90   12.6%  #####                      output        what the model writes
+  $    1.08    0.1%                             input         prompt text that was never cached
+
+median context per request: 135,579 tokens
+```
+
+That is one real week of heavy use. **87% of the bill was cache traffic and
+0.1% was uncached input** — the pool that output filters and compression
+proxies target. A proxy reporting "236,000 tokens compressed" was worth $1.18
+against a $782 bill.
+
+This does not make prompt-shrinking tools pointless: a token removed early is
+never cached and never re-read, so `rtk` and `tool-search` pay off through the
+cache pool rather than the input pool. It does mean you should judge them by
+what happens to cache volume, and it means the biggest lever is elsewhere.
+
+### The biggest lever: the context window
+
+A `[1m]` context suffix lets a conversation reach 600-800k tokens before
+anything compacts it, and every turn after that re-reads all of it. `token-saver
+on economy` drops the suffix and pins effort to `high`:
+
+| | before | after |
+|---|---|---|
+| model | `opus[1m]` | `opus` (200K window) |
+| effort | `max` | `high` |
+
+Same model and the same per-turn quality — compaction just happens sooner. It
+is fully reversible with `token-saver off economy`, and it deliberately does
+**not** switch you to a cheaper model: that is a real decision about your work,
+and `token-saver cost` prints per-model spend so you can make it with numbers.
+
+### Cache writes are a config-churn tax
+
+Editing `settings.json` or toggling an MCP server mid-session rebuilds the
+cached prefix, and rebuilding costs 1.25x what reading it costs 0.1x. If cache
+writes are a large share of your bill, batch config changes between sessions
+rather than during one.
+
 ## Proxy routing: which sessions get compressed
 
 If you run a compression proxy (`headroom`, `claudeslim`), where its route lives

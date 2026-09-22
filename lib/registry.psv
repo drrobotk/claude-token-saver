@@ -28,6 +28,7 @@
 
 tool-search|env|ENABLE_TOOL_SEARCH=1|1||Defer MCP tool schemas until called (biggest free win)
 lean-settings|custom||0|x:settings.hooks|Park per-call hooks that cost time and context
+economy|custom||0|x:settings.model|Cap the context window and effort — the 87% of the bill
 rtk|custom||1|x:hook.PreToolUse.Bash,o:cli-output|Rust CLI output compression via PreToolUse hook
 token-compression|plugin|token-compression@quantexa-central-plugins|0|x:hook.PreToolUse.Bash,o:cli-output|MCP payload compression, RTK-backed (org marketplace)
 caveman|plugin|caveman@caveman|1|o:terse-style|Terse assistant output style

@@ -198,6 +198,24 @@ Claims: none.
 
 ---
 
+## economy
+
+Not a third-party tool — token-saver's own cost profile, and the one aimed at
+what `token-saver cost` actually measures rather than at token counts.
+
+Drops a `[1m]` context suffix from `model` and pins `effortLevel` to `high`.
+The context window is the lever because cache reads scale with how much of the
+conversation is re-read every turn; on a measured week that was 60% of the bill
+while uncached input was 0.1%.
+
+Claims: `x:settings.model`. Reversible — the previous values are parked and
+restored exactly, including removing a key that was not set before.
+
+It will not switch your model to a cheaper one. Run `token-saver cost` and
+decide that yourself.
+
+---
+
 ## lean-settings
 
 Not a third-party tool — token-saver's own. Parks hook entries that fire on

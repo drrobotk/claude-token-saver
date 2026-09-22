@@ -253,5 +253,41 @@ case "$out" in *"shell"*) ok "route reports the current preference" ;;
                *) nope "route reports the current preference" "$out" ;; esac
 unset TS_SHELL_RC
 
+# ── 15. economy caps the context window and is fully reversible ─────────────
+#       The [1m] suffix is what lets a conversation reach 600-800k tokens and
+#       re-read all of it every turn; that is 60% of a real bill.
+seed
+python3 - <<'PY2'
+import json, os
+p = os.environ['TS_SETTINGS']; s = json.load(open(p))
+s['model'] = 'opus[1m]'; s['effortLevel'] = 'max'
+json.dump(s, open(p, 'w'), indent=2)
+PY2
+"$TS" on economy --force >/dev/null 2>&1
+check "economy drops the 1M context suffix" "$(jqpy "$TS_SETTINGS" "d['model']")" "opus"
+check "economy pins effort to high" "$(jqpy "$TS_SETTINGS" "d['effortLevel']")" "high"
+"$TS" off economy --force >/dev/null 2>&1
+check "economy restores the model" "$(jqpy "$TS_SETTINGS" "d['model']")" "opus[1m]"
+check "economy restores the effort" "$(jqpy "$TS_SETTINGS" "d['effortLevel']")" "max"
+
+# ── 16. the cost report runs and prices from transcripts ────────────────────
+seed
+FAKE="$SANDBOX/projects/proj"; mkdir -p "$FAKE"
+python3 - <<'PY2'
+import json, os, datetime
+d = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+row = {"timestamp": d, "message": {"model": "claude-opus-5", "usage": {
+    "input_tokens": 100, "output_tokens": 1000,
+    "cache_creation_input_tokens": 10000, "cache_read_input_tokens": 1000000}}}
+path = os.path.join(os.environ['SANDBOX'], 'projects', 'proj', 'a.jsonl')
+open(path, 'w').write(json.dumps(row) + "\n")
+PY2
+out="$(SANDBOX="$SANDBOX" TS_PROJECTS_DIR="$SANDBOX/projects" "$TS" cost 7 2>&1)"
+case "$out" in *"where the money goes"*) ok "cost reports a breakdown" ;;
+               *) nope "cost reports a breakdown" "$out" ;; esac
+# 1,000,000 cache-read tokens at 0.10x of $5/M = $0.50; that must dominate
+case "$out" in *"0.50"*) ok "cost prices cache reads correctly" ;;
+               *) nope "cost prices cache reads correctly" "$out" ;; esac
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
