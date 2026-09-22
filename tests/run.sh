@@ -228,5 +228,30 @@ case "$out" in
     *) nope "doctor explains the Remote Control trade" "$out" ;;
 esac
 
+# ── 14. the route preference moves the route and leaves no second copy ──────
+#       A copy in both places is unreadable: settings.json silently wins, so a
+#       shell export left behind looks like it is doing something and is not.
+seed
+RC3="$SANDBOX/rc3"
+printf 'export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"\n' > "$RC3"
+export TS_SHELL_RC="$RC3"
+
+"$TS" route settings --force >/dev/null 2>&1
+in_settings="$(jqpy "$TS_SETTINGS" "d.get('env',{}).get('ANTHROPIC_BASE_URL','')")"
+check "route settings puts the route in settings.json" "$in_settings" "http://127.0.0.1:8787"
+grep -q ANTHROPIC_BASE_URL "$RC3" && ok "route settings leaves the shell export alone" \
+    || nope "route settings leaves the shell export alone" "$(cat "$RC3")"
+
+"$TS" route shell --force >/dev/null 2>&1
+in_settings="$(jqpy "$TS_SETTINGS" "d.get('env',{}).get('ANTHROPIC_BASE_URL','')")"
+check "route shell removes the settings.json copy" "$in_settings" ""
+grep -q 'ANTHROPIC_BASE_URL' "$RC3" && ok "route shell keeps the shell export" \
+    || nope "route shell keeps the shell export" "$(cat "$RC3")"
+
+out="$("$TS" route 2>&1)"
+case "$out" in *"shell"*) ok "route reports the current preference" ;;
+               *) nope "route reports the current preference" "$out" ;; esac
+unset TS_SHELL_RC
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -124,6 +124,27 @@ token-saver report             token spend via ccusage
 
 `--force` skips confirmation prompts and is required when running non-interactively.
 
+## Proxy routing: which sessions get compressed
+
+If you run a compression proxy (`headroom`, `claudeslim`), where its route lives
+decides which sessions it applies to, and it is a genuine either/or:
+
+| `token-saver route …` | Compressed | Remote Control |
+|---|---|---|
+| `settings` | every session, however it was launched | off everywhere |
+| `shell` | only sessions started from an interactive shell — not VS Code, an IDE or the Dock | works in the rest |
+
+There is no third option: the proxy is exactly what disables Remote Control.
+`settings.json`'s `env` block also overrides the process environment, so under
+`route settings` the usual `env -u ANTHROPIC_BASE_URL` escape hatch has nothing
+to remove.
+
+The default is `shell`, and the trap it sets is quiet: your IDE sessions run
+uncompressed while `status` still says `headroom on`, because a route is
+configured *somewhere*. `token-saver doctor` reports which side the current
+session is on, and `token-saver route` prints the preference and this session's
+actual routing. Sessions already open keep whatever they started with.
+
 ## Adding a tool
 
 One line in [`lib/registry.psv`](lib/registry.psv):

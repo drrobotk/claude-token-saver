@@ -31,29 +31,70 @@ state_headroom() {
     [ -n "$(_headroom_url)" ] && echo on || echo off
 }
 
-# Claude Code's Remote Control needs a direct connection to the API, so it is
-# disabled whenever the base URL is redirected. Routing through the shell lets
-# you drop the proxy for a single session:
+# Where the proxy route lives decides which sessions are compressed, and it is
+# a real either/or:
 #
-#     env -u ANTHROPIC_BASE_URL claude --remote-control
+#   settings  ~/.claude/settings.json env. Read by EVERY session however it was
+#             launched — VS Code, an IDE, the Dock, a terminal. That block also
+#             overrides the process environment, so Remote Control cannot be
+#             recovered per session: `env -u ANTHROPIC_BASE_URL` has nothing to
+#             remove. Everything is compressed; Remote Control is off.
 #
-# Routing through settings.json does not: that env block overrides the process
-# environment, so `env -u` has nothing to remove and Remote Control stays off
-# with no way to opt out short of editing the file. Same proxy either way, so
-# token-saver moves the route to the shell. TS_HEADROOM_ROUTE=settings opts out.
-_headroom_route_via_shell() {
-    [ "${TS_HEADROOM_ROUTE:-shell}" = shell ] || return 0
-    local url; url="$(_headroom_url_settings)"
+#   shell     an export in your shell profile. Only sessions launched from an
+#             interactive shell pick it up; a GUI-launched session never sources
+#             it and runs uncompressed with Remote Control working.
+#
+# There is no third option: the proxy is exactly what disables Remote Control.
+# The preference is stored rather than inferred, because both "my IDE isn't
+# being compressed" and "Remote Control stopped working" are states a user can
+# arrive at by accident and then not be able to explain.
+ROUTE_PREF_FILE="$STATE_DIR/headroom-route"
+DEFAULT_ROUTE=shell
+
+_headroom_route_pref() {
+    if [ -n "${TS_HEADROOM_ROUTE:-}" ]; then printf '%s' "$TS_HEADROOM_ROUTE"; return; fi
+    if [ -f "$ROUTE_PREF_FILE" ]; then tr -d '[:space:]' < "$ROUTE_PREF_FILE"; return; fi
+    printf '%s' "$DEFAULT_ROUTE"
+}
+
+_headroom_set_route_pref() {
+    printf '%s\n' "$1" > "$ROUTE_PREF_FILE"
+}
+
+# Put the route where the preference says it belongs, and take it out of the
+# other place. Leaving a copy behind is how you end up unable to tell which one
+# is in force.
+_headroom_apply_route() {
+    local pref url
+    pref="$(_headroom_route_pref)"
+    url="$(_headroom_url)"
     [ -n "$url" ] || return 0
-    env_unset ANTHROPIC_BASE_URL >/dev/null
+
+    if [ "$pref" = settings ]; then
+        env_set ANTHROPIC_BASE_URL "$url" >/dev/null
+        ok "  every session is routed through $url, however it is launched"
+        info "  Remote Control is off while this is set; token-saver route shell reverses it."
+        info "  Sessions already open keep their old routing — restart them to pick this up."
+        return 0
+    fi
+
+    # shell: the settings copy must go, or it would win and nothing would change
+    if [ -n "$(_headroom_url_settings)" ]; then
+        env_unset ANTHROPIC_BASE_URL >/dev/null
+    fi
     if [ "$(_headroom_url_shell)" = "$url" ]; then
-        info "  route already exported from $(basename "$SHELL_RC"); removed the settings.json copy"
+        info "  route exported from $(basename "$SHELL_RC"); no settings.json copy"
     else
         printf '\n# Added by token-saver: keep the proxy route in the shell, not in\n# settings.json, so `env -u ANTHROPIC_BASE_URL claude --remote-control` works.\nexport ANTHROPIC_BASE_URL="%s"\n' "$url" >> "$SHELL_RC"
         info "  moved the route to $(basename "$SHELL_RC") — open a new shell for it to apply"
     fi
-    ok "  Remote Control is reachable again: env -u ANTHROPIC_BASE_URL claude --remote-control"
+    ok "  Remote Control is reachable: env -u ANTHROPIC_BASE_URL claude --remote-control"
+    warn "  sessions launched outside a shell (VS Code, the Dock) are NOT compressed;"
+    warn "  token-saver route settings compresses those too, at the cost of Remote Control."
 }
+
+# Kept as the name the enable paths call.
+_headroom_route_via_shell() { _headroom_apply_route; }
 
 # The mirror of the above. Moving the route to the shell means "off" has to take
 # it out of the shell too — a leftover export points every NEW shell at a proxy

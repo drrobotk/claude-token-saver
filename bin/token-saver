@@ -218,12 +218,16 @@ cmd_doctor() {
     #     out: that env block overrides the process environment, so the usual
     #     `env -u ANTHROPIC_BASE_URL claude --remote-control` escape hatch has
     #     nothing to remove. Same proxy, same saving, from the shell instead.
-    local in_settings
+    local in_settings route_pref
     in_settings="$(py "print(load(SETTINGS).get('env', {}).get('ANTHROPIC_BASE_URL', ''))" 2>/dev/null)"
-    if [ -n "$in_settings" ]; then
+    route_pref="$(load_module headroom; _headroom_route_pref 2>/dev/null || echo shell)"
+    if [ -n "$in_settings" ] && [ "$route_pref" != settings ]; then
         warn "ANTHROPIC_BASE_URL is set in settings.json, which disables Remote Control"
         warn "  settings.json env overrides the process env, so 'env -u' cannot undo it"
-        warn "  fix: token-saver on headroom   (moves the route to your shell profile)"
+        warn "  fix: token-saver route shell   (moves it to your shell profile)"
+    elif [ -n "$in_settings" ]; then
+        ok "  route is in settings.json by choice: every session is compressed"
+        info "  Remote Control is off; token-saver route shell reverses it."
     fi
 
     # 2c. A running proxy that nothing is routed through.
@@ -241,7 +245,8 @@ cmd_doctor() {
     if [ -n "$shell_route" ] || [ -n "$live_route" ]; then
         curl -fsS -m2 "${live_route:-$shell_route}/health" >/dev/null 2>&1 && proxy_up=true
     fi
-    if [ -n "$shell_route" ] && [ -z "$live_route" ] && [ -z "$in_settings" ]; then
+    if [ -n "$shell_route" ] && [ -z "$live_route" ] && [ -z "$in_settings" ] \
+       && [ "$route_pref" != settings ]; then
         if $proxy_up; then
             warn "the proxy at $shell_route is running, but this session is not routed through it"
         else
@@ -419,6 +424,34 @@ SHELL
     return 0
 }
 
+# ── route: which sessions go through the proxy ────────────────────────────────
+cmd_route() {
+    load_all_modules
+    local want="${1:-}"
+    if [ -z "$want" ]; then
+        local pref; pref="$(_headroom_route_pref)"
+        say "${BOLD}proxy route:${NC} $pref"
+        if [ "$pref" = settings ]; then
+            say "  every session is compressed, however it was launched."
+            say "  Remote Control is off. ${DIM}token-saver route shell${NC} reverses it."
+        else
+            say "  only sessions launched from an interactive shell are compressed."
+            say "  A VS Code, IDE or Dock session is NOT. Remote Control works in those."
+            say "  ${DIM}token-saver route settings${NC} compresses everything instead."
+        fi
+        say ""
+        say "${DIM}this session:${NC} ${ANTHROPIC_BASE_URL:-not routed (direct to the API)}"
+        return 0
+    fi
+    case "$want" in
+        settings|shell) ;;
+        *) err "route must be 'settings' or 'shell'"; return 1 ;;
+    esac
+    acquire_lock || return 1
+    _headroom_set_route_pref "$want"
+    _headroom_apply_route
+}
+
 # ── usage report ──────────────────────────────────────────────────────────────
 cmd_usage_report() {
     if command -v bunx >/dev/null 2>&1; then bunx ccusage@latest "$@"
@@ -440,6 +473,7 @@ ${BOLD}token-saver${NC} v$VERSION — one toggle for the Claude Code token-savin
   token-saver doctor                check for live interference and breakage
   token-saver conflicts             the full claim matrix, before you install
   token-saver selftest              verify the registry and the curated stack
+  token-saver route [settings|shell] which sessions the proxy compresses
   token-saver rc [claude args]      one session with Remote Control, no proxy
   token-saver rc install            add a claude-rc() function to your shell
   token-saver report [args]         token spend via ccusage
@@ -474,6 +508,7 @@ case "$cmd" in
     doctor)     cmd_doctor ;;
     conflicts)  cmd_conflicts ;;
     selftest)   cmd_selftest ;;
+    route)      cmd_route "${2:-}" ;;
     rc)         shift; cmd_rc "$@" ;;
     report)     shift; cmd_usage_report "$@" ;;
     version|-v|--version) say "token-saver $VERSION" ;;
