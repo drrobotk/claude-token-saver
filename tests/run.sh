@@ -211,5 +211,22 @@ out="$("$TS" doctor 2>&1)"
 case "$out" in *"disables Remote Control"*) ok "doctor flags a route in settings.json" ;;
                *) nope "doctor flags a route in settings.json" "$out" ;; esac
 
+# ── 13. a running proxy nothing is routed through is reported ───────────────
+#       Moving the route to a shell profile is what makes Remote Control work,
+#       but a GUI-launched session never sources that profile and is silently
+#       uncompressed. "headroom on" cannot distinguish the two.
+seed
+RC2="$SANDBOX/rc2"
+printf 'export ANTHROPIC_BASE_URL="http://127.0.0.1:59998"\n' > "$RC2"
+out="$(TS_SHELL_RC="$RC2" env -u ANTHROPIC_BASE_URL "$TS" doctor 2>&1)"
+case "$out" in
+    *"not routed through it"*|*"is not answering"*) ok "doctor reports an unrouted session" ;;
+    *) nope "doctor reports an unrouted session" "$out" ;;
+esac
+case "$out" in
+    *"Remote Control"*) ok "doctor explains the Remote Control trade" ;;
+    *) nope "doctor explains the Remote Control trade" "$out" ;;
+esac
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

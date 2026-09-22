@@ -241,6 +241,15 @@ Ships as a release binary: download to `~/bin/mcplex`, `chmod +x`, then
 
 ## headroom
 
+**The route's location decides which sessions are compressed.** In your shell
+profile it is picked up only by sessions launched from an interactive shell; a
+session started by VS Code, an IDE or the Dock never sources that profile, so
+it talks to the API directly — uncompressed, with Remote Control working. In
+`settings.json` it applies to every session, and Remote Control is off
+everywhere. There is no arrangement that gives you both in one session: the
+proxy is exactly what disables Remote Control. `doctor` reports which side of
+that split the current session is on, because "headroom on" cannot.
+
 Also: enabling it moves the proxy route out of `settings.json` and into your
 shell profile, so `env -u ANTHROPIC_BASE_URL claude --remote-control` still
 works — `token-saver rc` does exactly that, and `token-saver rc install` adds a

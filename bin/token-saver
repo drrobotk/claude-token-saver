@@ -226,6 +226,35 @@ cmd_doctor() {
         warn "  fix: token-saver on headroom   (moves the route to your shell profile)"
     fi
 
+    # 2c. A running proxy that nothing is routed through.
+    #
+    #     Moving the route to a shell profile is what makes Remote Control
+    #     usable, but it also means only sessions launched from an interactive
+    #     shell pick it up. A session started by VS Code, the Dock or an IDE
+    #     never sources that profile, so it talks to the API directly and its
+    #     tokens are not compressed. Both halves are defensible; silently
+    #     getting one when you believe you have the other is not, and
+    #     `status` saying "headroom on" is not enough to tell them apart.
+    local shell_route live_route proxy_up=false
+    shell_route="$(load_module headroom; _headroom_url_shell 2>/dev/null)"
+    live_route="${ANTHROPIC_BASE_URL:-}"
+    if [ -n "$shell_route" ] || [ -n "$live_route" ]; then
+        curl -fsS -m2 "${live_route:-$shell_route}/health" >/dev/null 2>&1 && proxy_up=true
+    fi
+    if [ -n "$shell_route" ] && [ -z "$live_route" ] && [ -z "$in_settings" ]; then
+        if $proxy_up; then
+            warn "the proxy at $shell_route is running, but this session is not routed through it"
+        else
+            warn "$shell_route is configured in your shell profile but is not answering"
+        fi
+        warn "  ANTHROPIC_BASE_URL is unset here, so this session goes straight to the API:"
+        warn "  no compression, and Remote Control works. Sessions started from a terminal"
+        warn "  that sources your profile are compressed instead, with Remote Control off."
+        warn "  You cannot have both in one session — the proxy is what disables it."
+    elif [ -n "$live_route" ] && $proxy_up; then
+        ok "  this session is routed through the proxy at $live_route (Remote Control is off here)"
+    fi
+
     # 3. More than one thing rewriting Bash commands, however it got there.
     local rewriters
     rewriters="$(py "
