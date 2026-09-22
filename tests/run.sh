@@ -271,23 +271,25 @@ check "economy restores the model" "$(jqpy "$TS_SETTINGS" "d['model']")" "opus[1
 check "economy restores the effort" "$(jqpy "$TS_SETTINGS" "d['effortLevel']")" "max"
 
 # ── 16. the cost report runs and prices from transcripts ────────────────────
+#       Fixture only: TS_PROJECTS_DIR must point the reader away from the real
+#       ~/.claude/projects, or this passes on whatever the machine happens to
+#       have and proves nothing.
 seed
-FAKE="$SANDBOX/projects/proj"; mkdir -p "$FAKE"
-python3 - <<'PY2'
-import json, os, datetime
-d = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
-row = {"timestamp": d, "message": {"model": "claude-opus-5", "usage": {
-    "input_tokens": 100, "output_tokens": 1000,
-    "cache_creation_input_tokens": 10000, "cache_read_input_tokens": 1000000}}}
-path = os.path.join(os.environ['SANDBOX'], 'projects', 'proj', 'a.jsonl')
-open(path, 'w').write(json.dumps(row) + "\n")
-PY2
-out="$(SANDBOX="$SANDBOX" TS_PROJECTS_DIR="$SANDBOX/projects" "$TS" cost 7 2>&1)"
+mkdir -p "$SANDBOX/projects/proj"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$SANDBOX/projects/proj/a.jsonl" <<JSON
+{"timestamp":"$NOW","message":{"model":"claude-opus-5","usage":{"input_tokens":100,"output_tokens":1000,"cache_creation_input_tokens":10000,"cache_read_input_tokens":1000000}}}
+JSON
+out="$(TS_PROJECTS_DIR="$SANDBOX/projects" "$TS" cost 7 2>&1)"
 case "$out" in *"where the money goes"*) ok "cost reports a breakdown" ;;
                *) nope "cost reports a breakdown" "$out" ;; esac
 # 1,000,000 cache-read tokens at 0.10x of $5/M = $0.50; that must dominate
 case "$out" in *"0.50"*) ok "cost prices cache reads correctly" ;;
                *) nope "cost prices cache reads correctly" "$out" ;; esac
+# and it must not silently fall back to the real transcript directory
+out="$(TS_PROJECTS_DIR="$SANDBOX/empty" "$TS" cost 7 2>&1)"
+case "$out" in *"no usage found"*) ok "cost reads only the directory it is given" ;;
+               *) nope "cost reads only the directory it is given" "$out" ;; esac
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
