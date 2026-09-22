@@ -54,6 +54,84 @@ def cost_of(usage: dict, model: str) -> dict:
     }
 
 
+def scan_sessions(days: int) -> dict:
+    """Per-conversation cost, and cost per request by position in it.
+
+    Conversations are where the money is: the prefix is re-read every turn, so
+    the same question costs more the later you ask it. Measuring that per
+    session is the only way to see it — a daily total hides it completely.
+    """
+    root = os.path.expanduser(os.environ.get("TS_PROJECTS_DIR", "~/.claude/projects"))
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    sessions: dict[str, list[float]] = collections.defaultdict(list)
+
+    for path in glob.glob(os.path.join(root, "*", "*.jsonl")):
+        sid = os.path.basename(path)[:-6]
+        try:
+            handle = open(path, errors="ignore")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                if '"usage"' not in line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                message = entry.get("message") or {}
+                usage = message.get("usage") or {}
+                if not usage:
+                    continue
+                try:
+                    when = datetime.datetime.fromisoformat(
+                        entry.get("timestamp", "").replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    continue
+                if when < cutoff:
+                    continue
+                sessions[sid].append(sum(cost_of(usage, message.get("model", "")).values()))
+    return sessions
+
+
+def report_sessions(days: int) -> None:
+    sessions = scan_sessions(days)
+    if not sessions:
+        print("no conversations found in that window")
+        return
+
+    buckets: dict[int, list] = collections.defaultdict(lambda: [0.0, 0])
+    for costs in sessions.values():
+        for i, c in enumerate(costs):
+            b = min(i // 25, 11)
+            buckets[b][0] += c
+            buckets[b][1] += 1
+
+    print(f"\n\033[1mcost per request, by position in the conversation\033[0m  (last {days} days)\n")
+    base = None
+    for b in sorted(buckets):
+        total, n = buckets[b]
+        avg = total / n
+        base = avg if base is None else base
+        label = f"{b*25}-{b*25+24}" if b < 11 else "275+"
+        print(f"  {label:<10}{n:>8,} req   ${avg:>7.4f}   {'#' * int(avg / 0.005):<40} {avg/base:.1f}x")
+
+    ranked = sorted(((sum(c), len(c), s) for s, c in sessions.items()), reverse=True)
+    grand = sum(r[0] for r in ranked)
+    print(f"\n\033[1mmost expensive conversations\033[0m   (${grand:,.2f} across {len(ranked)} of them)\n")
+    for cost, n, sid in ranked[:8]:
+        share = 100 * cost / grand if grand else 0
+        print(f"  ${cost:>8.2f}  {share:>4.1f}%  {n:>6,} req  ${cost/n:.4f}/req  {sid[:8]}")
+
+    top, topn, _ = ranked[0]
+    print(f"\n\033[1mwhat that means\033[0m")
+    print(f"  One conversation was {100*top/grand:.0f}% of the bill. Cost per request climbs with")
+    print("  conversation length because every turn re-reads the whole prefix, so the")
+    print("  same question is cheaper asked early. Starting a fresh conversation between")
+    print("  unrelated tasks is worth more than any tool in this repo.")
+    print()
+
+
 def scan(days: int) -> tuple[dict, dict, dict, int]:
     root = os.path.expanduser(os.environ.get("TS_PROJECTS_DIR", "~/.claude/projects"))
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
@@ -115,7 +193,11 @@ def money(counter: collections.Counter) -> float:
 
 
 def main(argv: list[str]) -> int:
-    days = int(argv[1]) if len(argv) > 1 else 7
+    args = [a for a in argv[1:] if not a.startswith("-")]
+    days = int(args[0]) if args else 7
+    if "--sessions" in argv or "-s" in argv:
+        report_sessions(days)
+        return 0
     by_day, by_model, totals, median_ctx = scan(days)
 
     if not totals["n"]:

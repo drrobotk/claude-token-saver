@@ -171,6 +171,27 @@ is fully reversible with `token-saver off economy`, and it deliberately does
 **not** switch you to a cheaper model: that is a real decision about your work,
 and `token-saver cost` prints per-model spend so you can make it with numbers.
 
+### The biggest lever of all: conversation length
+
+`token-saver cost 7 --sessions` ranks your conversations and shows how cost per
+request grows as one goes on:
+
+```
+  0-24         179 req   $ 0.1123   ############        1.0x
+  275+       3,277 req   $ 0.1887   #####################  1.5x
+
+most expensive conversations   ($798.93 across 11 of them)
+  $  354.05  44.3%   1,179 req  $0.3003/req  1049237b
+  $  269.89  33.8%   2,495 req  $0.1082/req  aab6f8ce
+```
+
+On that week **one conversation was 44% of the bill**, and 72% of all requests
+were past turn 275 — where each one costs 1.5x what it costs at the start,
+because every turn re-reads the whole prefix.
+
+Starting a fresh conversation between unrelated tasks is worth more than every
+tool in this repo combined. No setting can do it for you.
+
 ### Cache writes are a config-churn tax
 
 Editing `settings.json` or toggling an MCP server mid-session rebuilds the

@@ -291,5 +291,25 @@ out="$(TS_PROJECTS_DIR="$SANDBOX/empty" "$TS" cost 7 2>&1)"
 case "$out" in *"no usage found"*) ok "cost reads only the directory it is given" ;;
                *) nope "cost reads only the directory it is given" "$out" ;; esac
 
+# ── 17. the per-conversation view ranks sessions and needs no real data ─────
+seed
+mkdir -p "$SANDBOX/projects/proj"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+: > "$SANDBOX/projects/proj/big.jsonl"
+i=0
+while [ $i -lt 30 ]; do
+  printf '{"timestamp":"%s","message":{"model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":2000000}}}\n' "$NOW" >> "$SANDBOX/projects/proj/big.jsonl"
+  i=$((i + 1))
+done
+printf '{"timestamp":"%s","message":{"model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":1000}}}\n' "$NOW" > "$SANDBOX/projects/proj/small.jsonl"
+out="$(TS_PROJECTS_DIR="$SANDBOX/projects" "$TS" cost 7 --sessions 2>&1)"
+case "$out" in *"most expensive conversations"*) ok "cost --sessions ranks conversations" ;;
+               *) nope "cost --sessions ranks conversations" "$out" ;; esac
+# 30 requests x 2,000,000 cache-read tokens at 0.10x of $5/M = $30.00
+case "$out" in *"30.0"*) ok "cost --sessions prices a conversation correctly" ;;
+               *) nope "cost --sessions prices a conversation correctly" "$out" ;; esac
+case "$out" in *"big"*) ok "cost --sessions names the worst offender first" ;;
+               *) nope "cost --sessions names the worst offender first" "$out" ;; esac
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

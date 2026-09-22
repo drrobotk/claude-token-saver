@@ -455,7 +455,7 @@ cmd_route() {
 # ── cost: where the money actually goes ───────────────────────────────────────
 cmd_cost() {
     require_py || return 1
-    "$PY" "$TS_HOME/lib/cost.py" "${1:-7}"
+    "$PY" "$TS_HOME/lib/cost.py" "$@"
 }
 
 # ── usage report ──────────────────────────────────────────────────────────────
@@ -480,6 +480,7 @@ ${BOLD}token-saver${NC} v$VERSION — one toggle for the Claude Code token-savin
   token-saver conflicts             the full claim matrix, before you install
   token-saver selftest              verify the registry and the curated stack
   token-saver cost [days]           where the money actually goes (default 7)
+  token-saver cost [days] --sessions which conversations cost the most
   token-saver route [settings|shell] which sessions the proxy compresses
   token-saver rc [claude args]      one session with Remote Control, no proxy
   token-saver rc install            add a claude-rc() function to your shell
@@ -515,7 +516,7 @@ case "$cmd" in
     doctor)     cmd_doctor ;;
     conflicts)  cmd_conflicts ;;
     selftest)   cmd_selftest ;;
-    cost)       cmd_cost "${2:-7}" ;;
+    cost)       shift; cmd_cost "$@" ;;
     route)      cmd_route "${2:-}" ;;
     rc)         shift; cmd_rc "$@" ;;
     report)     shift; cmd_usage_report "$@" ;;
